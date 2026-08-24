@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+
+# These are audited transitive packages that need their published native/build hooks
+# during non-interactive local and CI installation.
+allowBuilds:
+  "@prisma/engines": true
+  esbuild: true
+  prisma: true
+  sharp: true
+  unrs-resolver: true

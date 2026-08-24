@@ -1,0 +1,266 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ChainFamily {
+  EVM
+  SOLANA
+  OTHER
+}
+
+enum VerificationStatus {
+  VERIFIED
+  UNVERIFIED
+  UNKNOWN
+}
+
+enum AssetRelationshipType {
+  NATIVE
+  WRAPPED
+  BRIDGED
+  CANONICAL
+}
+
+enum LiquidityPrecision {
+  EXACT
+  ESTIMATED
+  UNAVAILABLE
+}
+
+enum AlertCondition {
+  PRICE_ABOVE
+  PRICE_BELOW
+  LIQUIDITY_BELOW
+  LIQUIDITY_CHANGE_PERCENT
+  PRICE_DISLOCATION_PERCENT
+  PRICE_IMPACT_PERCENT
+}
+
+model Chain {
+  id                String    @id
+  name              String
+  family            ChainFamily
+  nativeAssetSymbol String
+  explorerUrl       String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  assets            Asset[]
+  pools             Pool[]
+
+  @@index([family])
+}
+
+model Asset {
+  id                 String             @id @default(cuid())
+  chainId            String
+  identifier         String
+  identifierKind     String
+  name               String
+  symbol             String
+  decimals           Int?
+  tokenStandard      String?
+  verification       VerificationStatus @default(UNKNOWN)
+  canonicalAssetKey  String?
+  logoUrl            String?
+  source             String
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  chain              Chain              @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  fromRelationships  AssetRelationship[] @relation("RelatedAsset")
+  toRelationships    AssetRelationship[] @relation("SourceAsset")
+  poolAssets         PoolAsset[]
+  priceObservations  PriceObservation[]
+  priceSnapshots     PriceSnapshot[]
+  liquiditySnapshots LiquiditySnapshot[]
+  watchlistAssets    WatchlistAsset[]
+  alerts             Alert[]
+
+  @@unique([chainId, identifier])
+  @@index([symbol])
+  @@index([canonicalAssetKey])
+  @@index([chainId, symbol])
+}
+
+model AssetRelationship {
+  id             String                @id @default(cuid())
+  sourceAssetId  String
+  relatedAssetId String
+  type           AssetRelationshipType
+  note           String?
+  createdAt      DateTime              @default(now())
+  relatedAsset   Asset                 @relation("RelatedAsset", fields: [relatedAssetId], references: [id], onDelete: Cascade)
+  sourceAsset    Asset                 @relation("SourceAsset", fields: [sourceAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceAssetId, relatedAssetId, type])
+  @@index([relatedAssetId])
+}
+
+model Provider {
+  id             String   @id @default(cuid())
+  key            String   @unique
+  name           String
+  kind           String
+  enabled        Boolean  @default(true)
+  configuredAt   DateTime?
+  lastSuccessAt  DateTime?
+  lastFailureAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  observations   PriceObservation[]
+}
+
+model Protocol {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  name      String
+  website   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  pools     Pool[]
+}
+
+model Pool {
+  id                     String             @id @default(cuid())
+  chainId                String
+  protocolId             String
+  address                String
+  pairLabel              String
+  feeBps                 Int?
+  isConcentratedLiquidity Boolean            @default(false)
+  liquidityPrecision     LiquidityPrecision @default(UNAVAILABLE)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  chain                  Chain              @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  protocol               Protocol           @relation(fields: [protocolId], references: [id], onDelete: Restrict)
+  assets                 PoolAsset[]
+  observations           PriceObservation[]
+  liquiditySnapshots     LiquiditySnapshot[]
+
+  @@unique([chainId, address])
+  @@index([protocolId])
+  @@index([chainId, updatedAt])
+}
+
+model PoolAsset {
+  poolId      String
+  assetId     String
+  side        String
+  reserveRaw  Decimal? @db.Decimal(65, 0)
+  reserveUsd  Decimal? @db.Decimal(38, 18)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  asset       Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  pool        Pool     @relation(fields: [poolId], references: [id], onDelete: Cascade)
+
+  @@id([poolId, assetId])
+  @@index([assetId])
+}
+
+model PriceObservation {
+  id                String   @id @default(cuid())
+  assetId           String
+  providerId        String
+  poolId            String?
+  source            String
+  sourceUrl         String?
+  priceUsd          Decimal  @db.Decimal(38, 18)
+  liquidityUsd      Decimal? @db.Decimal(38, 18)
+  quoteAssetQuality String
+  derivation        Json
+  methodology       String
+  blockNumber       BigInt?
+  blockTimestamp    DateTime?
+  observedAt        DateTime
+  createdAt         DateTime @default(now())
+  asset             Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  pool              Pool?    @relation(fields: [poolId], references: [id], onDelete: SetNull)
+  provider          Provider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+
+  @@index([assetId, observedAt(sort: Desc)])
+  @@index([providerId, observedAt(sort: Desc)])
+  @@index([poolId, observedAt(sort: Desc)])
+}
+
+model PriceSnapshot {
+  id                 String   @id @default(cuid())
+  assetId            String
+  granularitySeconds Int
+  priceUsd           Decimal  @db.Decimal(38, 18)
+  confidenceScore    Int
+  sourceCount        Int
+  observedAt         DateTime
+  createdAt          DateTime @default(now())
+  asset              Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, granularitySeconds, observedAt])
+  @@index([assetId, observedAt(sort: Desc)])
+}
+
+model LiquiditySnapshot {
+  id                   String   @id @default(cuid())
+  assetId              String
+  poolId               String?
+  granularitySeconds   Int
+  totalLiquidityUsd    Decimal? @db.Decimal(38, 18)
+  usableLiquidityUsd   Decimal? @db.Decimal(38, 18)
+  volume24hUsd         Decimal? @db.Decimal(38, 18)
+  observedAt           DateTime
+  createdAt            DateTime @default(now())
+  asset                Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  pool                 Pool?    @relation(fields: [poolId], references: [id], onDelete: SetNull)
+
+  @@index([assetId, observedAt(sort: Desc)])
+  @@index([poolId, observedAt(sort: Desc)])
+}
+
+model User {
+  id        String      @id @default(cuid())
+  email     String?     @unique
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  watchlists Watchlist[]
+  alerts    Alert[]
+}
+
+model Watchlist {
+  id        String           @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assets    WatchlistAsset[]
+
+  @@unique([userId, name])
+}
+
+model WatchlistAsset {
+  watchlistId String
+  assetId     String
+  createdAt   DateTime  @default(now())
+  asset       Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  watchlist   Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+
+  @@id([watchlistId, assetId])
+}
+
+model Alert {
+  id        String         @id @default(cuid())
+  userId    String
+  assetId   String
+  condition AlertCondition
+  threshold Decimal        @db.Decimal(38, 18)
+  enabled   Boolean        @default(true)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  asset     Asset          @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([assetId, condition])
+  @@index([userId, enabled])
+}
